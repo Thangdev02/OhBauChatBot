@@ -16,7 +16,7 @@ load_dotenv()
 genai.configure(api_key=os.getenv("API_KEY"))
 
 # Khởi tạo mô hình Gemini
-model = genai.GenerativeModel("gemini-1.5-flash")  # Sử dụng phiên bản mới nhất
+model = genai.GenerativeModel("gemini-2.0-flash")
 
 # Định nghĩa schema dữ liệu cho request
 class ChatRequest(BaseModel):
@@ -32,7 +32,7 @@ async def chat(request: ChatRequest):
         # Tạo prompt với ngữ cảnh
         prompt = f"""
         Bạn là một chatbot thân thiện, trả lời bằng tiếng Việt một cách tự nhiên và hữu ích.
-        Bạn là chatbot của OhBầu, ứng dụng quản lý sức khoẻ thai nhi
+        Bạn là chatbot của OhBầu, ứng dụng quản lý sức khoẻ thai nhi.
         Câu hỏi: {request.prompt}
         """
         # Gửi yêu cầu đến Gemini
@@ -45,11 +45,15 @@ async def chat(request: ChatRequest):
 if __name__ == "__main__":
     import uvicorn
     import os
+    port = 8000  # Mặc định cổng
     try:
-        port = int(os.environ.get("PORT", 8000))  # Lấy PORT từ môi trường, mặc định 8000
+        port_str = os.environ.get("PORT", "8000").strip()  # Lấy PORT và loại bỏ khoảng trắng
+        if port_str.endswith("."):  # Loại bỏ dấu chấm cuối nếu có
+            port_str = port_str[:-1]
+        port = int(port_str)  # Chuyển thành số nguyên
         if not (1 <= port <= 65535):  # Kiểm tra cổng hợp lệ
             raise ValueError(f"Port {port} is out of valid range (1-65535)")
-    except ValueError as e:
+    except (ValueError, TypeError) as e:
         print(f"Invalid port value: {e}. Falling back to port 8000.")
         port = 8000
     uvicorn.run(app, host="0.0.0.0", port=port)
