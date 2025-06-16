@@ -45,5 +45,11 @@ async def chat(request: ChatRequest):
 if __name__ == "__main__":
     import uvicorn
     import os
-    port = int(os.environ.get("PORT", 8000))  # Lấy PORT từ môi trường, mặc định 8000
+    try:
+        port = int(os.environ.get("PORT", 8000))  # Lấy PORT từ môi trường, mặc định 8000
+        if not (1 <= port <= 65535):  # Kiểm tra cổng hợp lệ
+            raise ValueError(f"Port {port} is out of valid range (1-65535)")
+    except ValueError as e:
+        print(f"Invalid port value: {e}. Falling back to port 8000.")
+        port = 8000
     uvicorn.run(app, host="0.0.0.0", port=port)
