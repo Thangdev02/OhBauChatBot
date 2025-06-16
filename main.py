@@ -42,6 +42,7 @@ async def chat(request: ChatRequest):
         return {"message": f"Lỗi: {str(e)}"}
 
 # Chạy ứng dụng
+# Chạy ứng dụng
 if __name__ == "__main__":
     import uvicorn
     import os
