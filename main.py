@@ -16,14 +16,27 @@ load_dotenv()
 genai.configure(api_key=os.getenv("API_KEY"))
 
 # Khởi tạo mô hình Gemini
-model = genai.GenerativeModel("gemini-2.0-flash")  # Sử dụng gemini-1.5-flash thay vì gemini-2.0-flash
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 # Định nghĩa schema dữ liệu cho request
 class ChatRequest(BaseModel):
     prompt: str
 
 # Khởi tạo ứng dụng FastAPI
-app = FastAPI(title="Simple Chatbot API", description="Chatbot sử dụng Gemini AI", version="1.0")
+app = FastAPI(title="Simple Chatbot API", description="Chatbot sử dụng Gemini AI", version="1.0", docs_url="/docs")
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+# Endpoint GET /
+@app.get("/")
+async def read_root():
+    return {"message": "Welcome to OhBầu Chatbot! Visit /docs to see API documentation and try /chat with POST."}
 
 # Endpoint POST /chat
 @app.post("/chat")
@@ -40,9 +53,7 @@ async def chat(request: ChatRequest):
         return {"message": response.text}
     except Exception as e:
         return {"message": f"Lỗi: {str(e)}"}
-@app.get("/chat")
-async def chat_get():
-    return {"message": "Sử dụng POST với body {'prompt': 'câu hỏi'} để tương tác với chatbot."}
+
 # Chạy ứng dụng
 if __name__ == "__main__":
     import uvicorn
