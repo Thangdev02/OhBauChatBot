@@ -40,22 +40,24 @@ async def chat(request: ChatRequest):
         return {"message": response.text}
     except Exception as e:
         return {"message": f"Lỗi: {str(e)}"}
-
+@app.get("/chat")
+async def chat_get():
+    return {"message": "Sử dụng POST với body {'prompt': 'câu hỏi'} để tương tác với chatbot."}
 # Chạy ứng dụng
 if __name__ == "__main__":
     import uvicorn
     import os
     port = 8000  # Mặc định cổng
     try:
-        port_str = os.environ.get("PORT", "8000").strip()  # Lấy PORT và loại bỏ khoảng trắng
-        print(f"Raw PORT value: {port_str}")  # Debug giá trị PORT
-        if port_str.endswith("."):  # Loại bỏ dấu chấm cuối nếu có
+        port_str = os.environ.get("PORT", "8000").strip()
+        print(f"Raw PORT value: {port_str}")
+        if port_str.endswith("."):
             port_str = port_str[:-1]
-        port = int(port_str)  # Chuyển thành số nguyên
-        if not (1 <= port <= 65535):  # Kiểm tra cổng hợp lệ
+        port = int(port_str)
+        if not (1 <= port <= 65535):
             raise ValueError(f"Port {port} is out of valid range (1-65535)")
     except (ValueError, TypeError) as e:
         print(f"Invalid port value: {e}. Falling back to port 8000.")
         port = 8000
-    print(f"Starting uvicorn on port: {port}")  # Debug cổng cuối cùng
+    print(f"Starting uvicorn on port: {port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
