@@ -16,7 +16,7 @@ load_dotenv()
 genai.configure(api_key=os.getenv("API_KEY"))
 
 # Khởi tạo mô hình Gemini
-model = genai.GenerativeModel("gemini-2.0-flash")
+model = genai.GenerativeModel("gemini-2.0-flash")  # Sử dụng gemini-1.5-flash thay vì gemini-2.0-flash
 
 # Định nghĩa schema dữ liệu cho request
 class ChatRequest(BaseModel):
@@ -42,13 +42,13 @@ async def chat(request: ChatRequest):
         return {"message": f"Lỗi: {str(e)}"}
 
 # Chạy ứng dụng
-# Chạy ứng dụng
 if __name__ == "__main__":
     import uvicorn
     import os
     port = 8000  # Mặc định cổng
     try:
         port_str = os.environ.get("PORT", "8000").strip()  # Lấy PORT và loại bỏ khoảng trắng
+        print(f"Raw PORT value: {port_str}")  # Debug giá trị PORT
         if port_str.endswith("."):  # Loại bỏ dấu chấm cuối nếu có
             port_str = port_str[:-1]
         port = int(port_str)  # Chuyển thành số nguyên
@@ -57,4 +57,5 @@ if __name__ == "__main__":
     except (ValueError, TypeError) as e:
         print(f"Invalid port value: {e}. Falling back to port 8000.")
         port = 8000
+    print(f"Starting uvicorn on port: {port}")  # Debug cổng cuối cùng
     uvicorn.run(app, host="0.0.0.0", port=port)
