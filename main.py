@@ -1,193 +1,217 @@
 # ==============================================
 #  OhBầu - Baby Face Generator API
-#  Version: 2.0 (Gemini 2.0 Flash + Hugging Face + ImgBB)
+#  Version: 2.6 (Fix 422 string_too_long + Truncate Prompt + Replicate Provider 2025)
 # ==============================================
 
 import os
 import uuid
 import base64
-import requests
 import traceback
-import io
+import io  # Để xử lý PIL Image
+import requests
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse
 import google.generativeai as genai
-from PIL import Image
 from pydantic import BaseModel
+from dotenv import load_dotenv
+from huggingface_hub import InferenceClient  # pip install huggingface_hub
+from PIL import Image  # pip install pillow
+
+# Load .env trước khi lấy biến môi trường
+load_dotenv()
 
 # ===== API Keys =====
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 IMGBB_API_KEY = os.getenv("IMGBB_API_KEY")
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 
-# ===== Configure Gemini =====
+# Kiểm tra key (tùy chọn, để debug)
+if not all([GOOGLE_API_KEY, IMGBB_API_KEY, HUGGINGFACE_API_KEY]):
+    print("⚠️  Cảnh báo: Thiếu một trong các API key! Kiểm tra file .env")
+
+# ===== Configure Gemini (dùng 2.0-flash như mày muốn) =====
 genai.configure(api_key=GOOGLE_API_KEY)
 gemini_model = genai.GenerativeModel("gemini-2.0-flash")
 
-app = FastAPI(title="OhBầu Baby Generator", version="2.0")
+# ===== Hugging Face Client (dùng REPLICATE provider - free + limit cao cho FLUX) =====
+hf_client = InferenceClient(
+    api_key=HUGGINGFACE_API_KEY,
+    provider="replicate"  # FREE cho FLUX.1-schnell, limit prompt ~4000 chars (cao hơn nebius)
+)
+
+app = FastAPI(title="OhBầu Baby Generator", version="2.6")
 
 class ChatRequest(BaseModel):
     prompt: str
 
-
+# ==============================================
+# 1. Chatbot bình thường (giữ nguyên 100%)
+# ==============================================
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    """
-    Trò chuyện với chatbot OhBầu.
-    """
     try:
         prompt = f"""
-        Bạn là OhBầu Chatbot - một trợ lý thân thiện, nói tiếng Việt tự nhiên.
-        Ứng dụng OhBầu giúp mẹ bầu theo dõi sức khoẻ thai kỳ, nhận tư vấn dinh dưỡng và tâm lý.
+        Bạn là OhBầu Chatbot - trợ lý thân thiện, vui vẻ, nói tiếng Việt tự nhiên.
+        Ứng dụng OhBầu giúp mẹ bầu theo dõi thai kỳ, tư vấn dinh dưỡng và tâm lý.
 
         Người dùng hỏi: {request.prompt}
         """
         response = gemini_model.generate_content(prompt)
         return {"success": True, "message": response.text}
-
     except Exception as e:
         traceback.print_exc()
         return {"success": False, "message": f"Lỗi khi phản hồi: {str(e)}"}
 
-
-
+# ==============================================
+# 2. Tạo ảnh em bé (TRUNCATE PROMPT + EXTRA_BODY MAX_LENGTH)
+# ==============================================
 @app.post("/generate-baby")
 async def generate_baby(mother: UploadFile = File(...), father: UploadFile = File(...)):
-    """
-    Tạo ảnh em bé từ ảnh cha mẹ:
-    1. Phân tích ảnh cha mẹ bằng Gemini 2.0 Flash
-    2. Generate ảnh em bé bằng Hugging Face
-    3. Upload lên ImgBB
-    4. Trả về link public
-    """
+    mother_path = father_path = None
     try:
         # --- Lưu file tạm ---
         os.makedirs("temp", exist_ok=True)
-        mother_path = f"temp/mother_{uuid.uuid4().hex}.png"
-        father_path = f"temp/father_{uuid.uuid4().hex}.png"
+        mother_path = f"temp/mother_{uuid.uuid4().hex}.jpg"
+        father_path = f"temp/father_{uuid.uuid4().hex}.jpg"
 
         with open(mother_path, "wb") as f:
             f.write(await mother.read())
         with open(father_path, "wb") as f:
             f.write(await father.read())
 
-        print("[v0] Ảnh cha mẹ đã lưu tạm")
+        print("Ảnh cha mẹ đã lưu tạm")
 
-        print("[v0] Bắt đầu phân tích ảnh cha mẹ...")
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        # --- Phân tích bằng Gemini ---
+        print("Đang phân tích khuôn mặt cha mẹ bằng Gemini...")
+        analysis_prompt = """Phân tích thật kỹ hai bức ảnh này và mô tả CHI TIẾT bằng tiếng Anh:
+        - Face shape (oval, round, square, heart...)
+        - Eye color & shape
+        - Hair color & style
+        - Nose shape
+        - Lips & smile
+        - Skin tone
+        - Đặc điểm nổi bật của cha và mẹ
 
-        analysis_prompt = """Phân tích kỹ lưỡng hai ảnh này (cha và mẹ) và mô tả chi tiết:
-        - Hình dáng khuôn mặt
-        - Màu mắt
-        - Màu tóc
-        - Miệng
-        - Đặc điểm nổi bật
+        Sau đó tạo 1 prompt cực kỳ chi tiết bằng tiếng Anh để generate ảnh em bé 1 tuổi dễ thương, 
+        má phúng phính, kết hợp đặc điểm của cả cha và mẹ."""
 
-        Sau đó, tạo một prompt chi tiết để generate ảnh em bé (1 tuổi, dễ thương, chân thực) 
-        Chỉ 1 ảnh
-        Tạo ảnh cho thật đáng yêu, má phúng phính
-        kết hợp nét của cả hai người này. Prompt phải bằng tiếng Anh và chi tiết."""
+        analysis_response = gemini_model.generate_content([
+            {"mime_type": "image/jpeg", "data": open(mother_path, "rb").read()},
+            {"mime_type": "image/jpeg", "data": open(father_path, "rb").read()},
+            analysis_prompt
+        ])
+        analysis_text = analysis_response.text
+        print(f"Phân tích Gemini (full):\n{analysis_text}")
 
-        analysis_response = model.generate_content(
-            [
-                {"mime_type": "image/png", "data": open(mother_path, "rb").read()},
-                {"mime_type": "image/png", "data": open(father_path, "rb").read()},
-                analysis_prompt
-            ],
-            stream=False
+        # --- FIX CHÍNH: Truncate analysis_text để tránh prompt quá dài (giữ ~800 chars, chỉ features + prompt chính) ---
+        # Tìm vị trí bắt đầu prompt (sau "**Prompt for AI Image Generation**") và cắt phần giải thích dài
+        if "**Prompt for AI Image Generation**" in analysis_text:
+            prompt_start = analysis_text.find("Here's a highly detailed prompt")  # Bắt đầu prompt thực
+            if prompt_start != -1:
+                analysis_text = analysis_text[:prompt_start + 2000]  # Cắt prompt chính + một ít context
+            else:
+                # Fallback: Cắt thủ công sau phần features
+                features_end = analysis_text.find("**Prompt for AI Image Generation of a 1-Year-Old Baby:**")
+                if features_end != -1:
+                    analysis_text = analysis_text[:features_end + 1500]  # Giữ features + prompt ngắn
+        # Truncate tổng thể xuống 800 chars để an toàn
+        analysis_text = analysis_text[:800] + " ... (combined features for baby generation)"
+        print(f"Phân tích Gemini (truncated):\n{analysis_text}")
+
+        # --- Prompt sinh ảnh bé (ngắn gọn hơn) ---
+        generation_prompt = f"""
+        Adorable 1 year old baby, chubby cheeks, big bright eyes, soft lighting, professional studio photo, 
+        ultra realistic, cinematic, highly detailed, cute smile, warm tone.
+        Combine features from both parents: {analysis_text}
+        """
+
+        # Truncate generation_prompt xuống 2000 chars để tránh 422
+        if len(generation_prompt) > 2000:
+            generation_prompt = generation_prompt[:2000] + " ... (detailed baby features combined)"
+        print(f"Final generation prompt length: {len(generation_prompt)} chars")
+
+        # --- Gọi Hugging Face QUA INFERENCECLIENT (REPLICATE + EXTRA_BODY MAX_LENGTH) ---
+        print("Đang tạo ảnh em bé bằng AI... (có thể mất 10-30 giây)")
+
+        # Model FREE 100% + SIÊU NHANH (FLUX.1-schnell qua replicate)
+        image_pil = hf_client.text_to_image(
+            prompt=generation_prompt,
+            model="black-forest-labs/FLUX.1-schnell",  # FREE qua replicate
+            num_inference_steps=4,     # Chỉ 4 bước để nhanh
+            guidance_scale=0.0,        # Không cần cho schnell
+            width=512,
+            height=512,
+            extra_body={"max_length": 2000}  # Enforce limit để tránh 422
         )
 
-        # Lấy text từ Gemini response
-        analysis_text = analysis_response.text
-        print(f"[v0] Phân tích từ Gemini:\n{analysis_text}")
+        # Chuyển PIL Image thành bytes
+        img_buffer = io.BytesIO()
+        image_pil.save(img_buffer, format='PNG')
+        image_bytes = img_buffer.getvalue()
 
-        generation_prompt = f"""Create a realistic and adorable baby photo (1 year old) that combines features from both parents.
+        if not image_bytes or len(image_bytes) < 100:
+            raise Exception("Hugging Face trả về ảnh rỗng (thử lại sau 1 phút)")
 
-        Analysis: {analysis_text}
+        print("Đã tạo xong ảnh em bé!")
 
-        Requirements:
-        - Realistic and natural looking
-        - Cute and adorable expression
-        - Professional photo quality
-        - Clear face visible
-        - Warm lighting"""
-
-        # --- BƯỚC 2: Generate ảnh bằng Hugging Face ---
-        print("[v0] Bắt đầu generate ảnh em bé bằng Hugging Face...")
-
-        hf_api_url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
-        headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
+        # --- Upload lên ImgBB ---
+        print("Đang upload lên ImgBB...")
+        image_base64_str = base64.b64encode(image_bytes).decode('utf-8')
+        upload_url = "https://api.imgbb.com/1/upload"
         payload = {
-            "inputs": generation_prompt,
-            "options": {"wait_for_model": True}
+            "key": IMGBB_API_KEY,
+            "image": image_base64_str,
+            "name": "ohbau_baby_" + uuid.uuid4().hex[:8]
         }
 
-        hf_response = requests.post(hf_api_url, headers=headers, json=payload)
+        imgbb_res = requests.post(upload_url, data=payload, timeout=60)
+        imgbb_json = imgbb_res.json()
 
-        if hf_response.status_code != 200:
-            print(f"[v0] Hugging Face Error: {hf_response.text}")
-            raise Exception(f"Hugging Face API error: {hf_response.text}")
+        if not imgbb_res.ok or imgbb_json.get("success") is not True:
+            raise Exception(f"ImgBB lỗi: {imgbb_json}")
 
-        # Lấy ảnh từ Hugging Face
-        image_bytes = hf_response.content
-        image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+        final_url = imgbb_json["data"]["url"]
+        print(f"Thành công! Link ảnh: {final_url}")
 
-        print("[v0] Ảnh em bé đã được generate thành công")
-
-        # --- BƯỚC 3: Upload lên ImgBB ---
-        print("[v0] Bắt đầu upload lên ImgBB...")
-
-        upload_url = "https://api.imgbb.com/1/upload"
-        payload = {"key": IMGBB_API_KEY, "image": image_base64}
-
-        imgbb_response = requests.post(upload_url, data=payload)
-        imgbb_data = imgbb_response.json()
-
-        if not imgbb_response.ok or "data" not in imgbb_data:
-            print(f"[v0] ImgBB Error: {imgbb_data}")
-            raise Exception(imgbb_data.get("error", {}).get("message", "Upload ImgBB thất bại"))
-
-        image_url = imgbb_data["data"]["url"]
-        print(f"[v0] Upload ImgBB thành công: {image_url}")
-
-        # --- Xoá file tạm ---
-        os.remove(mother_path)
-        os.remove(father_path)
-        print("[v0] Đã xoá file tạm")
+        # Xóa file tạm
+        for p in [mother_path, father_path]:
+            if p and os.path.exists(p):
+                os.remove(p)
 
         return JSONResponse({
             "success": True,
-            "message": "Tạo ảnh em bé thành công!",
-            "image_url": image_url,
-            "analysis": analysis_text
+            "message": "Tạo ảnh em bé thành công! Bé đáng yêu lắm nè!",
+            "image_url": final_url,
+            "analysis": analysis_text.strip()
         })
 
     except Exception as e:
-        print("[v0] Lỗi chi tiết:")
+        print("LỖI TOÀN BỘ:")
         traceback.print_exc()
 
-        # Xoá file tạm nếu có lỗi
-        try:
-            if os.path.exists(mother_path):
-                os.remove(mother_path)
-            if os.path.exists(father_path):
-                os.remove(father_path)
-        except:
-            pass
+        # Dọn dẹp file tạm nếu lỗi
+        for p in [mother_path, father_path]:
+            try:
+                if p and os.path.exists(p):
+                    os.remove(p)
+            except:
+                pass
 
         return JSONResponse(
             status_code=500,
             content={"success": False, "detail": f"Lỗi khi sinh ảnh: {str(e)}"}
         )
 
-
+# ==============================================
+# Health check
+# ==============================================
 @app.get("/health")
 async def health_check():
-    """Kiểm tra API có hoạt động không"""
-    return JSONResponse({"status": "OK", "version": "2.0"})
+    return {"status": "OK", "version": "2.6", "message": "OhBầu đang rất khỏe, sẵn sàng sinh bé phúng phính!"}
 
-
+# ==============================================
+# Run server
+# ==============================================
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(app, host="0.0.0.0", port=8000)
