@@ -1,15 +1,8 @@
-# ==============================================
-#  OhBầu v5.0 – BÉ ĐẸP NHƯ NGƯỜI THẬT 100%
-#  Dùng SDXL + RealVisXL V4.0 → KHÔNG BAO GIỜ hết lượt
-#  Đã test 500+ lần → ổn định tuyệt đối
-# ==============================================
-
 import os
 import uuid
 import base64
 import io
 import httpx
-import filetype
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,10 +10,11 @@ from PIL import Image, ImageEnhance
 from dotenv import load_dotenv
 import google.generativeai as genai
 from huggingface_hub import InferenceClient
+from pydantic import BaseModel
 
+# ===============================
 load_dotenv()
 
-# === API KEYS ===
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 IMGBB_API_KEY = os.getenv("IMGBB_API_KEY")
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
@@ -30,15 +24,24 @@ if not all([GOOGLE_API_KEY, IMGBB_API_KEY, HUGGINGFACE_API_KEY]):
 
 genai.configure(api_key=GOOGLE_API_KEY)
 gemini_model = genai.GenerativeModel("gemini-2.0-flash")
-
-# Model CHUẨN – chạy free mãi mãi
 hf_client = InferenceClient(token=HUGGINGFACE_API_KEY)
 
-app = FastAPI(title="OhBầu v5.0 - Bé Siêu Thật")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
-                   allow_methods=["*"], allow_headers=["*"])
+app = FastAPI(
+    title="OhBầu v6.0 - Bé Siêu Thật + Chat JSON",
+    version="6.0",
+    description="Gen bé đẹp như thật (SDXL free mãi mãi) + Chat hỗ trợ mẹ bầu"
+)
 
-# === Xử lý mọi định dạng ảnh ===
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ===============================
 async def read_and_convert_image(file: UploadFile) -> bytes:
     contents = await file.read()
     if len(contents) == 0:
@@ -49,14 +52,47 @@ async def read_and_convert_image(file: UploadFile) -> bytes:
     img.save(buf, format="JPEG", quality=92)
     return buf.getvalue()
 
-# === TẠO BÉ ===
-@app.post("/generate-baby")
+
+class ChatRequest(BaseModel):
+    prompt: str
+
+
+# ===============================
+# UPLOAD IMGBB SIÊU ỔN ĐỊNH (có retry + giảm size)
+# ===============================
+async def safe_upload_imgbb(b64_str: str) -> str:
+    url = "https://api.imgbb.com/1/upload"
+    payload = {
+        "key": IMGBB_API_KEY,
+        "image": b64_str,
+        "name": "ohbau_" + uuid.uuid4().hex[:10],
+        "expiration": 15552000  # 180 ngày
+    }
+
+    for _ in range(3):  # thử tối đa 3 lần
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.post(url, data=payload, timeout=30.0)
+                data = r.json()
+                if data.get("success"):
+                    return data["data"]["url"]
+                else:
+                    print(f"ImgBB lỗi: {data.get('error', 'Unknown')}")
+        except Exception as e:
+            print(f"Upload retry lỗi: {e}")
+
+    raise Exception("Upload ImgBB thất bại sau 3 lần thử")
+
+
+# ===============================
+# GEN BÉ – DỰA HOÀN TOÀN TRÊN V5.0 CỦA BẠN (CHẠY NGON NHẤT)
+# ===============================
+@app.post("/generate-baby", tags=["Baby Generator"])
 async def generate_baby(mother: UploadFile = File(...), father: UploadFile = File(...)):
     try:
         mom = await read_and_convert_image(mother)
         dad = await read_and_convert_image(father)
 
-        # Gemini phân tích đặc điểm
         analysis = gemini_model.generate_content([
             {"mime_type": "image/jpeg", "data": mom},
             {"mime_type": "image/jpeg", "data": dad},
@@ -64,7 +100,6 @@ async def generate_baby(mother: UploadFile = File(...), father: UploadFile = Fil
         ])
         traits = analysis.text.strip()
 
-        # PROMPT HOÀN HẢO CHO SDXL + RealVisXL
         prompt = (
             f"professional studio portrait of a cute 1 year old Vietnamese baby, "
             f"chubby cheeks, big sparkling eyes, soft baby skin, natural blush, "
@@ -73,9 +108,8 @@ async def generate_baby(mother: UploadFile = File(...), father: UploadFile = Fil
             f"warm tone, looks like real photo, ultra detailed baby skin --ar 1:1 --v 5 --q 2"
         )
 
-        # DÙNG SDXL – MIỄN PHÍ VÔ HẠN, ĐẸP NHƯ THẬT
         image = hf_client.text_to_image(
-            model="stabilityai/stable-diffusion-xl-base-1.0",
+            model="stabilityai/stable-diffusion-xl-base-1.0",  # FREE MÃI MÃI
             prompt=prompt,
             height=1024,
             width=1024,
@@ -83,44 +117,84 @@ async def generate_baby(mother: UploadFile = File(...), father: UploadFile = Fil
             guidance_scale=7.5,
         )
 
-        # Làm đẹp thêm chút
+        # Hậu kỳ nhẹ
         img = ImageEnhance.Brightness(image).enhance(1.05)
         img = ImageEnhance.Contrast(img).enhance(1.03)
-
         final = img.resize((384, 384), Image.Resampling.LANCZOS)
+
         buf = io.BytesIO()
-        final.save(buf, format="JPEG", quality=90, optimize=True)
+        final.save(buf, format="JPEG", quality=88, optimize=True)  # size < 500KB → ImgBB luôn nhận
         b64 = base64.b64encode(buf.getvalue()).decode()
 
-        async with httpx.AsyncClient(timeout=60) as client:
-            r = await client.post("https://api.imgbb.com/1/upload", data={
-                "key": IMGBB_API_KEY,
-                "image": b64,
-                "name": "ohbau_" + uuid.uuid4().hex[:10]
-            })
-        data = r.json()
-
-        if not data.get("success"):
-            return JSONResponse(status_code=500, content={"success": False, "error": "Upload ảnh thất bại"})
+        image_url = await safe_upload_imgbb(b64)
 
         return {
             "success": True,
-            "message": "Bé yêu đã ra đời xinh lung linh luôn nè!!!",
-            "image_url": data["data"]["url"],
+            "message": "Bé yêu đã chào đời xinh như thiên thần luôn nè!!!",
+            "image_url": image_url,
             "analysis": traits
         }
 
     except Exception as e:
         error_msg = str(e)
-        if "rate limit" in error_msg.lower() or "quota" in error_msg.lower():
-            error_msg = "Hệ thống đang đông, thử lại sau 10 giây nha bé yêu!"
+        print("LỖI CHI TIẾT:", error_msg)  # để bạn thấy thật trên terminal
+        if any(x in error_msg.lower() for x in ["rate limit", "quota", "timeout"]):
+            error_msg = "Hệ thống đang đông khách, thử lại sau 10 giây nha mẹ iu!"
         return JSONResponse(status_code=500, content={"success": False, "error": error_msg})
 
 
+# ===============================
+# CHAT – NHẬN JSON BODY { "prompt": "..." }
+# ===============================
+@app.post("/chat", tags=["Chat Support"])
+async def chat(request: ChatRequest):
+    try:
+        message = request.prompt.strip()
+        msg_lower = message.lower()
+
+        # Rule bắt buộc chuyển hướng bác sĩ
+        doctor_keywords = ["liên hệ", "hỗ trợ", "bác sĩ", "tư vấn", "zalo", "điện thoại", "gọi", "hotline", "hạnh",
+                           "đặng hạnh", "bs hạnh"]
+        if any(k in msg_lower for k in doctor_keywords):
+            return {
+                "success": True,
+                "reply": (
+                    "Dạ mẹ ơi, để được hỗ trợ chính xác và tận tâm nhất về thai kỳ, dinh dưỡng hay tâm lý,\n"
+                    "mẹ liên hệ trực tiếp **Bác sĩ Đặng Hạnh** nha ạ ❤️\n\n"
+                    "Zalo/Điện thoại: **038 424 8930**\n"
+                    "Bác sĩ hỗ trợ 24/7 luôn ạ!"
+                )
+            }
+
+        system_prompt = (
+            "Bạn là OhBầu Chatbot – trợ lý dễ thương, nói tiếng Việt tự nhiên, "
+            "chuyên hỗ trợ mẹ bầu về thai kỳ, dinh dưỡng, tâm lý. "
+            "Trả lời ngắn gọn, ấm áp, dùng nhiều emoji đáng yêu."
+        )
+
+        response = gemini_model.generate_content([
+            system_prompt,
+            f"Mẹ bầu hỏi: {message}\nTrả lời thật dễ thương và ngắn gọn thôi nha:"
+        ])
+
+        return {"success": True, "reply": response.text.strip()}
+
+    except Exception as e:
+        return {"success": False, "reply": "Oops, OhBầu đang hơi mệt xíu, mẹ hỏi lại sau vài giây nha"}
+
+
+# ===============================
 @app.get("/health")
 async def health():
-    return {"status": "OK", "version": "5.0-SDXL", "message": "OhBầu đang sinh bé liên tục không nghỉ!"}
+    return {
+        "status": "OK",
+        "version": "6.0-SDXL-Chat",
+        "message": "OhBầu đang khỏe mạnh, sinh bé mượt + chat ngon lành!"
+    }
 
+
+# ===============================
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8001)
